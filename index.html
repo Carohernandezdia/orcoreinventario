@@ -243,16 +243,20 @@ function buscarProducto(codigo) {
 $('btn-confirmar').onclick = confirmarConteo;
 $('p-qty').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); confirmarConteo(); } });
 
-async function confirmarConteo() {
-  if (!productoActual) return;
-  const cantidad = parseFloat($('p-qty').value) || 0;
-  if (cantidad <= 0) return;
-  await agregarConteo(productoActual.codigo, cantidad, seccionActual);
-  $('preview').style.display = 'none';
-  $('not-found').style.display = 'none';
-  barcodeInput.value = '';
-  barcodeInput.focus();
-  productoActual = null;
+async function agregarConteo(codigo, cantidad, seccion, nombreManual) {
+  const nombre = nombreManual || (PROD_BY_CODE[codigo] ? PROD_BY_CODE[codigo].n : codigo);
+  try {
+    await fetch(API_URL, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ codigo, cantidad, seccion, nombre })
+    });
+    $('sync-status').textContent = 'Enviado a Sheets ✓ (revisa la hoja para confirmar)';
+    agregarAlLog(codigo, nombre, cantidad, seccion);
+  } catch (e) {
+    $('sync-status').textContent = 'No se pudo enviar — revisa la conexión e intenta de nuevo';
+  }
 }
 
 // ---- Cámara ----
