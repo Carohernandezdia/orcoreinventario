@@ -81,6 +81,7 @@
 
     <div class="scan-row">
       <input type="text" id="barcode" placeholder="Escanea con la pistola o escribe el código" autocomplete="off" inputmode="numeric">
+      <button class="btn-naranja" id="btn-buscar">Buscar</button>
       <button class="btn-cam" id="btn-cam">📷</button>
     </div>
     <div id="cam-box"><div id="reader"></div></div>
@@ -93,6 +94,11 @@
         <input type="number" id="p-qty" value="1" min="0" step="1">
         <button class="btn-naranja" id="btn-confirmar">Agregar</button>
       </div>
+      <div style="margin-top:8px;">
+        <label style="font-size:12px;color:#5B6470;">Precio (editable)</label>
+        <input type="number" id="p-precio" value="0" min="0" step="1">
+      </div>
+      <button class="btn-secundario" id="btn-cancelar" style="width:100%;margin-top:8px;">Cancelar / solo consultar</button>
     </div>
     <div class="not-found" id="not-found" style="display:none;">Código no encontrado en el listado del sistema. Puedes agregarlo igual con un nombre manual.</div>
   </div>
@@ -205,16 +211,20 @@ async function loadCardex() {
 async function agregarConteo(codigo, cantidad, seccion, nombreManual) {
   const nombre = nombreManual || (PROD_BY_CODE[codigo] ? PROD_BY_CODE[codigo].n : codigo);
   try {
-    await fetch(API_URL, {
+    const res = await fetch(API_URL, {
       method: 'POST',
-      mode: 'no-cors',
-      headers: { 'Content-Type': 'text/plain' },
       body: JSON.stringify({ codigo, cantidad, seccion, nombre })
     });
-    $('sync-status').textContent = 'Enviado a Sheets ✓ (revisa la hoja para confirmar)';
-    agregarAlLog(codigo, nombre, cantidad, seccion);
+    const data = await res.json();
+    if (data.error) {
+      $('sync-status').textContent = 'ERROR: ' + data.error;
+    } else {
+      $('sync-status').textContent = 'Guardado en Sheets ✓';
+      agregarAlLog(codigo, nombre, cantidad, seccion);
+    }
   } catch (e) {
-    $('sync-status').textContent = 'No se pudo enviar — revisa la conexión e intenta de nuevo';
+    $('sync-status').textContent = 'No se pudo confirmar el guardado (' + e.message + ') — revisa el Sheets';
+    agregarAlLog(codigo, nombre, cantidad, seccion);
   }
 }
 
@@ -235,6 +245,7 @@ barcodeInput.addEventListener('keydown', e => {
     buscarProducto(barcodeInput.value.trim());
   }
 });
+$('btn-buscar').onclick = () => buscarProducto(barcodeInput.value.trim());
 
 function buscarProducto(codigo) {
   if (!codigo) return;
@@ -252,19 +263,32 @@ function buscarProducto(codigo) {
     $('preview').style.display = 'block';
     $('not-found').style.display = 'block';
   }
+  $('p-precio').value = p ? p.p : 0;
   $('p-qty').value = 1;
   $('p-qty').focus();
   $('p-qty').select();
 }
 
 $('btn-confirmar').onclick = confirmarConteo;
+$('btn-cancelar').onclick = () => {
+  $('preview').style.display = 'none';
+  $('not-found').style.display = 'none';
+  barcodeInput.value = '';
+  barcodeInput.focus();
+  productoActual = null;
+};
 $('p-qty').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); confirmarConteo(); } });
 
 async function confirmarConteo() {
   if (!productoActual) return;
   const cantidad = parseFloat($('p-qty').value) || 0;
   if (cantidad <= 0) return;
+  const btn = $('btn-confirmar');
+  btn.disabled = true;
+  btn.textContent = 'Guardando...';
   await agregarConteo(productoActual.codigo, cantidad, seccionActual);
+  btn.disabled = false;
+  btn.textContent = 'Agregar';
   $('preview').style.display = 'none';
   $('not-found').style.display = 'none';
   barcodeInput.value = '';
