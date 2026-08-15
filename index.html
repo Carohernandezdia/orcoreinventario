@@ -76,7 +76,6 @@
   <div class="card">
     <div class="secciones">
       <button class="sec-btn active" data-sec="Bodega">Bodega</button>
-      <button class="sec-btn" data-sec="Exhibición">Exhibición</button>
       <button class="sec-btn" data-sec="Tienda">Tienda</button>
     </div>
 
@@ -125,7 +124,14 @@
 
 </main>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<script>
+let LIB_CAMARA_LISTA = false;
+const scriptCam = document.createElement('script');
+scriptCam.src = 'https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js';
+scriptCam.onload = () => { LIB_CAMARA_LISTA = true; };
+scriptCam.onerror = () => { LIB_CAMARA_LISTA = false; };
+document.head.appendChild(scriptCam);
+</script>
 <script>
 const PROD_BY_CODE = {};
 let PRODUCTS_READY = false;
@@ -187,35 +193,28 @@ document.querySelectorAll('.sec-btn').forEach(b => {
   };
 });
 
-// ---- Storage helpers (Netlify Function + Netlify Blobs) ----
+// ---- Storage helpers (Google Apps Script conectado al Sheets) ----
+// Pega aquí la URL que te da Google al desplegar el Apps Script como app web:
 const API_URL = 'https://script.google.com/macros/s/AKfycbyMlI6uFpXJCd7_ZkwAstixlEdvmvSsBnouJ2FIM5CPbN8dFbXD6ZQkqIr7zj894TNDrA/exec';
 
 async function loadCardex() {
-  try {
-    const res = await fetch(API_URL);
-    cardexCache = await res.json();
-    $('sync-status').textContent = 'Sincronizado · ' + Object.keys(cardexCache).length + ' productos contados';
-  } catch (e) {
-    cardexCache = cardexCache || {};
-    $('sync-status').textContent = 'Sin conexión con el servidor de datos (aún puedes seguir escaneando en este dispositivo)';
-  }
+  // Por ahora no leemos de vuelta el Sheets aquí — revisa el cárdex directo en Google Sheets.
+  $('sync-status').textContent = 'Listo para escanear · revisa los totales en tu Google Sheets';
 }
 
 async function agregarConteo(codigo, cantidad, seccion, nombreManual) {
+  const nombre = nombreManual || (PROD_BY_CODE[codigo] ? PROD_BY_CODE[codigo].n : codigo);
   try {
-    const res = await fetch(API_URL, {
+    await fetch(API_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        codigo, cantidad, seccion,
-        nombre: nombreManual || (PROD_BY_CODE[codigo] ? PROD_BY_CODE[codigo].n : codigo)
-      })
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ codigo, cantidad, seccion, nombre })
     });
-    cardexCache = await res.json();
-    $('sync-status').textContent = 'Sincronizado · ' + Object.keys(cardexCache).length + ' productos contados';
-    agregarAlLog(codigo, cardexCache[codigo].nombre, cantidad, seccion);
+    $('sync-status').textContent = 'Enviado a Sheets ✓ (revisa la hoja para confirmar)';
+    agregarAlLog(codigo, nombre, cantidad, seccion);
   } catch (e) {
-    $('sync-status').textContent = 'No se pudo guardar — revisa la conexión e intenta de nuevo';
+    $('sync-status').textContent = 'No se pudo enviar — revisa la conexión e intenta de nuevo';
   }
 }
 
@@ -261,20 +260,16 @@ function buscarProducto(codigo) {
 $('btn-confirmar').onclick = confirmarConteo;
 $('p-qty').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); confirmarConteo(); } });
 
-async function agregarConteo(codigo, cantidad, seccion, nombreManual) {
-  const nombre = nombreManual || (PROD_BY_CODE[codigo] ? PROD_BY_CODE[codigo].n : codigo);
-  try {
-    await fetch(API_URL, {
-      method: 'POST',
-      mode: 'no-cors',
-      headers: { 'Content-Type': 'text/plain' },
-      body: JSON.stringify({ codigo, cantidad, seccion, nombre })
-    });
-    $('sync-status').textContent = 'Enviado a Sheets ✓ (revisa la hoja para confirmar)';
-    agregarAlLog(codigo, nombre, cantidad, seccion);
-  } catch (e) {
-    $('sync-status').textContent = 'No se pudo enviar — revisa la conexión e intenta de nuevo';
-  }
+async function confirmarConteo() {
+  if (!productoActual) return;
+  const cantidad = parseFloat($('p-qty').value) || 0;
+  if (cantidad <= 0) return;
+  await agregarConteo(productoActual.codigo, cantidad, seccionActual);
+  $('preview').style.display = 'none';
+  $('not-found').style.display = 'none';
+  barcodeInput.value = '';
+  barcodeInput.focus();
+  productoActual = null;
 }
 
 // ---- Cámara ----
@@ -285,21 +280,29 @@ $('btn-cam').onclick = () => {
     box.style.display = 'none';
     return;
   }
+  if (!LIB_CAMARA_LISTA || typeof Html5Qrcode === 'undefined') {
+    $('sync-status').textContent = 'La cámara no cargó (revisa tu conexión) — usa la pistola mientras tanto';
+    return;
+  }
   box.style.display = 'block';
-  html5QrCode = new Html5Qrcode("reader");
-  html5QrCode.start(
-    { facingMode: "environment" },
-    { fps: 10, qrbox: 220 },
-    (decodedText) => {
-      barcodeInput.value = decodedText;
-      buscarProducto(decodedText);
-      html5QrCode.stop().catch(()=>{});
-      box.style.display = 'none';
-    },
-    () => {}
-  ).catch(err => {
-    box.innerHTML = '<div class="not-found">No se pudo abrir la cámara: ' + err + '</div>';
-  });
+  try {
+    html5QrCode = new Html5Qrcode("reader");
+    html5QrCode.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: 220 },
+      (decodedText) => {
+        barcodeInput.value = decodedText;
+        buscarProducto(decodedText);
+        html5QrCode.stop().catch(()=>{});
+        box.style.display = 'none';
+      },
+      () => {}
+    ).catch(err => {
+      box.innerHTML = '<div class="not-found">No se pudo abrir la cámara: ' + err + '</div>';
+    });
+  } catch (err) {
+    box.innerHTML = '<div class="not-found">Error al iniciar la cámara: ' + err + '</div>';
+  }
 };
 
 // ---- Cárdex / tabla ----
