@@ -264,12 +264,7 @@ async function confirmarConteo() {
   if (!productoActual) return;
   const cantidad = parseFloat($('p-qty').value) || 0;
   if (cantidad <= 0) return;
-  const btn = $('btn-confirmar');
-  btn.disabled = true;
-  btn.textContent = 'Guardando...';
   await agregarConteo(productoActual.codigo, cantidad, seccionActual);
-  btn.disabled = false;
-  btn.textContent = 'Agregar';
   $('preview').style.display = 'none';
   $('not-found').style.display = 'none';
   barcodeInput.value = '';
