@@ -1,3 +1,7 @@
+El contenido es generado por usuarios y no está verificado.
+
+
+Más información sobre los artefactos
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -81,10 +85,12 @@
 
     <div class="scan-row">
       <input type="text" id="barcode" placeholder="Escanea con la pistola o escribe el código" autocomplete="off" inputmode="numeric">
+      <button class="btn-naranja" id="btn-buscar">Buscar</button>
       <button class="btn-cam" id="btn-cam">📷</button>
     </div>
     <div id="cam-box"><div id="reader"></div></div>
-    <div class="hint">Apunta la pistola aquí y escanea. También puedes tocar 📷 para usar la cámara del celular.</div>
+    <div class="hint">Apunta la pistola aquí y escanea. También puedes tocar 📷 para usar la cámara del celular, o escribir parte del nombre y tocar Buscar.</div>
+    <div id="resultados-nombre" style="display:none;margin-top:8px;"></div>
 
     <div class="preview" id="preview" style="display:none;">
       <div class="nombre" id="p-nombre"></div>
@@ -93,8 +99,16 @@
         <input type="number" id="p-qty" value="1" min="0" step="1">
         <button class="btn-naranja" id="btn-confirmar">Agregar</button>
       </div>
+      <div style="margin-top:8px;">
+        <label style="font-size:12px;color:#5B6470;">Precio (editable)</label>
+        <input type="number" id="p-precio" value="0" min="0" step="1">
+      </div>
+      <button class="btn-secundario" id="btn-cancelar" style="width:100%;margin-top:8px;">Cancelar / solo consultar</button>
     </div>
-    <div class="not-found" id="not-found" style="display:none;">Código no encontrado en el listado del sistema. Puedes agregarlo igual con un nombre manual.</div>
+    <div class="not-found" id="not-found" style="display:none;">Código no encontrado en el listado del sistema. Escribe el nombre para guardarlo igual:</div>
+    <div id="nombre-manual-box" style="display:none;margin-top:6px;">
+      <input type="text" id="p-nombre-manual" placeholder="Nombre del producto">
+    </div>
   </div>
 
   <div class="card">
@@ -134,11 +148,13 @@ document.head.appendChild(scriptCam);
 </script>
 <script>
 const PROD_BY_CODE = {};
+let PRODUCTS_LIST = [];
 let PRODUCTS_READY = false;
 
 fetch('/products.json')
   .then(r => r.json())
   .then(data => {
+    PRODUCTS_LIST = data;
     data.forEach(p => { PROD_BY_CODE[p.c] = p; });
     PRODUCTS_READY = true;
     $('sync-status').textContent = 'Productos cargados (' + data.length + ') · Sincronizando...';
@@ -205,16 +221,20 @@ async function loadCardex() {
 async function agregarConteo(codigo, cantidad, seccion, nombreManual) {
   const nombre = nombreManual || (PROD_BY_CODE[codigo] ? PROD_BY_CODE[codigo].n : codigo);
   try {
-    await fetch(API_URL, {
+    const res = await fetch(API_URL, {
       method: 'POST',
-      mode: 'no-cors',
-      headers: { 'Content-Type': 'text/plain' },
       body: JSON.stringify({ codigo, cantidad, seccion, nombre })
     });
-    $('sync-status').textContent = 'Enviado a Sheets ✓ (revisa la hoja para confirmar)';
-    agregarAlLog(codigo, nombre, cantidad, seccion);
+    const data = await res.json();
+    if (data.error) {
+      $('sync-status').textContent = 'ERROR: ' + data.error;
+    } else {
+      $('sync-status').textContent = 'Guardado en Sheets ✓';
+      agregarAlLog(codigo, nombre, cantidad, seccion);
+    }
   } catch (e) {
-    $('sync-status').textContent = 'No se pudo enviar — revisa la conexión e intenta de nuevo';
+    $('sync-status').textContent = 'No se pudo confirmar el guardado (' + e.message + ') — revisa el Sheets';
+    agregarAlLog(codigo, nombre, cantidad, seccion);
   }
 }
 
@@ -235,38 +255,100 @@ barcodeInput.addEventListener('keydown', e => {
     buscarProducto(barcodeInput.value.trim());
   }
 });
+$('btn-buscar').onclick = () => buscarProducto(barcodeInput.value.trim());
 
 function buscarProducto(codigo) {
   if (!codigo) return;
-  reproducirBeep();
+  $('resultados-nombre').style.display = 'none';
+  $('resultados-nombre').innerHTML = '';
+
   const p = PROD_BY_CODE[codigo];
-  productoActual = { codigo, encontrado: !!p };
   if (p) {
-    $('p-nombre').textContent = p.n;
-    $('p-meta').textContent = 'Código ' + codigo + ' · Saldo en sistema: ' + p.s + ' · Costo unit: $' + p.p.toLocaleString('es-CO');
-    $('preview').style.display = 'block';
-    $('not-found').style.display = 'none';
-  } else {
+    reproducirBeep();
+    mostrarPreview(codigo, p);
+    return;
+  }
+
+  // No coincide como código exacto: buscamos por nombre
+  const texto = codigo.toLowerCase();
+  const soloNumeros = /^[0-9]+$/.test(codigo);
+  const coincidencias = PRODUCTS_LIST.filter(prod => prod.n.toLowerCase().includes(texto)).slice(0, 8);
+
+  if (coincidencias.length > 0) {
+    reproducirBeep();
+    const cont = $('resultados-nombre');
+    cont.style.display = 'block';
+    coincidencias.forEach(prod => {
+      const div = document.createElement('div');
+      div.style.cssText = 'padding:10px;border:1px solid #E4E7EB;border-radius:8px;margin-bottom:6px;font-size:13px;';
+      div.innerHTML = '<b>' + prod.n + '</b><br><span style="color:#5B6470;">Código ' + prod.c + '</span>';
+      div.onclick = () => {
+        cont.style.display = 'none';
+        cont.innerHTML = '';
+        barcodeInput.value = prod.c;
+        mostrarPreview(prod.c, prod);
+      };
+      cont.appendChild(div);
+    });
+  } else if (soloNumeros) {
+    productoActual = { codigo, encontrado: false };
     $('p-nombre').textContent = 'Código: ' + codigo;
     $('p-meta').textContent = 'No aparece en el listado del sistema — se guardará solo con el código';
+    $('p-precio').value = 0;
     $('preview').style.display = 'block';
     $('not-found').style.display = 'block';
+    $('nombre-manual-box').style.display = 'block';
+    $('p-nombre-manual').value = '';
+    $('p-qty').value = 1;
+    $('p-qty').focus();
+    $('p-qty').select();
+  } else {
+    $('sync-status').textContent = 'No se encontró ningún producto con ese nombre';
   }
+}
+
+function mostrarPreview(codigo, p) {
+  productoActual = { codigo, encontrado: true };
+  $('p-nombre').textContent = p.n;
+  $('p-meta').textContent = 'Código ' + codigo + ' · Saldo en sistema: ' + p.s + ' · Costo unit: $' + p.p.toLocaleString('es-CO');
+  $('preview').style.display = 'block';
+  $('not-found').style.display = 'none';
+  $('nombre-manual-box').style.display = 'none';
+  $('p-precio').value = p.p;
   $('p-qty').value = 1;
   $('p-qty').focus();
   $('p-qty').select();
 }
 
 $('btn-confirmar').onclick = confirmarConteo;
+$('btn-cancelar').onclick = () => {
+  $('preview').style.display = 'none';
+  $('not-found').style.display = 'none';
+  $('nombre-manual-box').style.display = 'none';
+  barcodeInput.value = '';
+  barcodeInput.focus();
+  productoActual = null;
+};
 $('p-qty').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); confirmarConteo(); } });
 
 async function confirmarConteo() {
   if (!productoActual) return;
   const cantidad = parseFloat($('p-qty').value) || 0;
   if (cantidad <= 0) return;
-  await agregarConteo(productoActual.codigo, cantidad, seccionActual);
+  let nombreManual = null;
+  if (!productoActual.encontrado) {
+    const escrito = $('p-nombre-manual').value.trim();
+    nombreManual = escrito || productoActual.codigo;
+  }
+  const btn = $('btn-confirmar');
+  btn.disabled = true;
+  btn.textContent = 'Guardando...';
+  await agregarConteo(productoActual.codigo, cantidad, seccionActual, nombreManual);
+  btn.disabled = false;
+  btn.textContent = 'Agregar';
   $('preview').style.display = 'none';
   $('not-found').style.display = 'none';
+  $('nombre-manual-box').style.display = 'none';
   barcodeInput.value = '';
   barcodeInput.focus();
   productoActual = null;
@@ -360,4 +442,3 @@ setInterval(loadCardex, 5000);
 </script>
 </body>
 </html>
-Enlace copiado
